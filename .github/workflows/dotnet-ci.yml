@@ -1,4 +1,4 @@
-name: .NET CI Pipeline
+name: CI Pipeline
 
 on:
   push:
@@ -9,8 +9,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout code
-      - name: Checkout
+      # 1. Get code from GitHub
+      - name: Checkout code
         uses: actions/checkout@v4
 
       # 2. Setup .NET
