@@ -5,17 +5,17 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-qa:
     runs-on: ubuntu-latest
 
     steps:
       # --------------------------------
-      # 1. Checkout
+      # 1. Checkout (IMPORTANT for git diff)
       # --------------------------------
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2   # IMPORTANT for git diff
+          fetch-depth: 2
 
       # --------------------------------
       # 2. Setup .NET
@@ -38,24 +38,34 @@ jobs:
         run: dotnet build App/App.csproj --no-restore
 
       # --------------------------------
-      # 5. Collect ONLY CHANGED FILES (SMART QA)
+      # 5. Collect Git Diff (SMART QA INPUT)
       # --------------------------------
       - name: Collect Git Diff Context
         run: |
-          echo "=== CHANGED FILES ===" > context.txt
+          echo "===== CHANGED FILES =====" > context.txt
           git diff --name-only HEAD~1 HEAD >> context.txt
 
-          echo "=== CODE DIFF ===" >> context.txt
+          echo "===== CODE DIFF =====" >> context.txt
           git diff HEAD~1 HEAD >> context.txt
 
       # --------------------------------
-      # 6. SMART HERMES QA (FIXED TOKEN USAGE)
+      # 6. Install jq (FIX JSON ISSUES)
+      # --------------------------------
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # --------------------------------
+      # 7. HERMES SMART QA (FIXED + SAFE)
       # --------------------------------
       - name: Hermes Smart QA
+        id: qa
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           CONTEXT=$(cat context.txt | head -c 4000)
+
+          # SAFE JSON ESCAPING
+          SAFE_CONTEXT=$(echo "$CONTEXT" | jq -Rs .)
 
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
@@ -65,11 +75,11 @@ jobs:
               \"messages\": [
                 {
                   \"role\": \"system\",
-                  \"content\": \"You are Hermes QA agent. You analyze ONLY code changes (diff-based). Be strict but concise.\"
+                  \"content\": \"You are Hermes QA agent. You analyze code diffs for build safety and risks.\"
                 },
                 {
                   \"role\": \"user\",
-                  \"content\": \"Analyze this git diff. Check for build risk, breaking changes, missing dependencies, and unsafe code changes. Return ONLY JSON: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"\\\"}. Diff: $CONTEXT\"
+                  \"content\": \"Analyze this git diff. Check for build issues, missing dependencies, breaking changes, and security risks. Return ONLY JSON: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"\\\"}. Diff: $SAFE_CONTEXT\"
                 }
               ]
             }")
@@ -77,6 +87,8 @@ jobs:
           echo "$RESPONSE"
 
           STATUS=$(echo "$RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+
+          echo "QA_STATUS=$STATUS" >> $GITHUB_ENV
 
           if [[ "$STATUS" != "PASS" ]]; then
             echo "❌ QA FAILED"
@@ -86,13 +98,13 @@ jobs:
           echo "✅ QA PASSED"
 
   deploy:
-    needs: build
+    needs: build-and-qa
     runs-on: ubuntu-latest
     if: success()
 
     steps:
       # --------------------------------
-      # 7. Deploy to WSL / Server
+      # 8. Deploy to WSL / Server
       # --------------------------------
       - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -101,7 +113,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            echo "🚀 Deploy starting..."
+            echo "🚀 Starting Deployment..."
 
             cd ~/my-cicd-project
 
