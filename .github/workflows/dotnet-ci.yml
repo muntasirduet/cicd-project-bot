@@ -19,13 +19,11 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # 3. Restore dependencies
       - name: Restore
-        run: dotnet restore
+  run: dotnet restore App/App.csproj
 
-      # 4. Build project
-      - name: Build
-        run: dotnet build --no-restore
+- name: Build
+  run: dotnet build App/App.csproj --no-restore
 
       # 5. Run app
       - name: Run
