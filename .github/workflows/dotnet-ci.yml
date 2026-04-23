@@ -1,4 +1,4 @@
-name: CI + Hermes QA (Stable)
+name: CI + Deep Hermes QA + Auto Deploy
 
 on:
   push:
@@ -9,50 +9,109 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # --------------------------------
       # 1. Checkout code
+      # --------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --------------------------------
       # 2. Setup .NET
+      # --------------------------------
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      # 3. Restore project (FIXED PATH)
+      # --------------------------------
+      # 3. Restore
+      # --------------------------------
       - name: Restore
         run: dotnet restore App/App.csproj
 
-      # 4. Build project
+      # --------------------------------
+      # 4. Build
+      # --------------------------------
       - name: Build
         run: dotnet build App/App.csproj --no-restore
 
-      # 5. Install Hermes (NON-INTERACTIVE SAFE MODE)
-      - name: Install Hermes
+      # --------------------------------
+      # 5. Collect FULL Repo Context (DEEP QA INPUT)
+      # --------------------------------
+      - name: Collect Repo Context
         run: |
-          curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || true
+          echo "===== FILE TREE =====" > context.txt
+          find . -type f -not -path "*/.git/*" >> context.txt
 
-      # 6. Ensure Hermes is available (fallback safety)
-      - name: Verify Hermes
-        run: |
-          which hermes || echo "Hermes not found, skipping install step"
+          echo "===== CS FILES SAMPLE =====" >> context.txt
+          find . -name "*.cs" | head -20 >> context.txt
 
-      # 7. Run QA (fail-safe logic)
-      - name: Run Hermes QA
+          echo "===== PROJECT FILE =====" >> context.txt
+          cat App/App.csproj >> context.txt || true
+
+      # --------------------------------
+      # 6. HERMES DEEP AI QA (REAL)
+      # --------------------------------
+      - name: Hermes Deep QA
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if command -v hermes >/dev/null 2>&1; then
-            RESULT=$(hermes run "You are a QA engineer. Check this .NET project. Return ONLY PASS or FAIL.")
-          else
-            RESULT="PASS"
-          fi
+          CONTEXT=$(cat context.txt | head -c 12000)
 
-          echo "QA RESULT: $RESULT"
+          RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"google/gemini-3.1-flash-lite-preview\",
+              \"messages\": [
+                {
+                  \"role\": \"system\",
+                  \"content\": \"You are Hermes QA agent. You analyze full software repositories deeply for production readiness.\"
+                },
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Analyze this repository deeply. Check: build issues, .NET structure, missing dependencies, security risks, deployment risks, plugin structure (if any), and best practices. Return ONLY JSON in this format: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"short explanation\\\",\\\"risks\\\":[\\\"list\\\"]}. Repository Context: $CONTEXT\"
+                }
+              ]
+            }")
 
-          if [[ "$RESULT" != *"PASS"* ]]; then
+          echo "$RESPONSE"
+
+          STATUS=$(echo "$RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+
+          echo "QA_STATUS=$STATUS" >> $GITHUB_ENV
+
+          if [[ "$STATUS" != "PASS" ]]; then
             echo "❌ QA FAILED"
             exit 1
           fi
 
           echo "✅ QA PASSED"
+
+  deploy:
+    needs: build-and-qa
+    runs-on: ubuntu-latest
+    if: success()
+
+    steps:
+      # --------------------------------
+      # 7. Deploy to WSL / Server
+      # --------------------------------
+      - name: Deploy to WSL
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            echo "🚀 Starting Deployment..."
+
+            cd ~/my-cicd-project || exit 1
+
+            git pull origin main
+
+            dotnet build App/App.csproj -c Release
+
+            echo "========================="
+            echo "DEPLOY SUCCESSFUL 🚀"
+            echo "========================="
