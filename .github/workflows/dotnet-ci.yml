@@ -1,19 +1,21 @@
-name: CI + Deep Hermes QA + Auto Deploy
+name: CI + Smart Hermes QA + Auto Deploy
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  build-and-qa:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       # --------------------------------
-      # 1. Checkout code
+      # 1. Checkout
       # --------------------------------
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # IMPORTANT for git diff
 
       # --------------------------------
       # 2. Setup .NET
@@ -36,27 +38,24 @@ jobs:
         run: dotnet build App/App.csproj --no-restore
 
       # --------------------------------
-      # 5. Collect FULL Repo Context (DEEP QA INPUT)
+      # 5. Collect ONLY CHANGED FILES (SMART QA)
       # --------------------------------
-      - name: Collect Repo Context
+      - name: Collect Git Diff Context
         run: |
-          echo "===== FILE TREE =====" > context.txt
-          find . -type f -not -path "*/.git/*" >> context.txt
+          echo "=== CHANGED FILES ===" > context.txt
+          git diff --name-only HEAD~1 HEAD >> context.txt
 
-          echo "===== CS FILES SAMPLE =====" >> context.txt
-          find . -name "*.cs" | head -20 >> context.txt
-
-          echo "===== PROJECT FILE =====" >> context.txt
-          cat App/App.csproj >> context.txt || true
+          echo "=== CODE DIFF ===" >> context.txt
+          git diff HEAD~1 HEAD >> context.txt
 
       # --------------------------------
-      # 6. HERMES DEEP AI QA (REAL)
+      # 6. SMART HERMES QA (FIXED TOKEN USAGE)
       # --------------------------------
-      - name: Hermes Deep QA
+      - name: Hermes Smart QA
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          CONTEXT=$(cat context.txt | head -c 12000)
+          CONTEXT=$(cat context.txt | head -c 4000)
 
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
@@ -66,11 +65,11 @@ jobs:
               \"messages\": [
                 {
                   \"role\": \"system\",
-                  \"content\": \"You are Hermes QA agent. You analyze full software repositories deeply for production readiness.\"
+                  \"content\": \"You are Hermes QA agent. You analyze ONLY code changes (diff-based). Be strict but concise.\"
                 },
                 {
                   \"role\": \"user\",
-                  \"content\": \"Analyze this repository deeply. Check: build issues, .NET structure, missing dependencies, security risks, deployment risks, plugin structure (if any), and best practices. Return ONLY JSON in this format: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"short explanation\\\",\\\"risks\\\":[\\\"list\\\"]}. Repository Context: $CONTEXT\"
+                  \"content\": \"Analyze this git diff. Check for build risk, breaking changes, missing dependencies, and unsafe code changes. Return ONLY JSON: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"\\\"}. Diff: $CONTEXT\"
                 }
               ]
             }")
@@ -78,8 +77,6 @@ jobs:
           echo "$RESPONSE"
 
           STATUS=$(echo "$RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-
-          echo "QA_STATUS=$STATUS" >> $GITHUB_ENV
 
           if [[ "$STATUS" != "PASS" ]]; then
             echo "❌ QA FAILED"
@@ -89,7 +86,7 @@ jobs:
           echo "✅ QA PASSED"
 
   deploy:
-    needs: build-and-qa
+    needs: build
     runs-on: ubuntu-latest
     if: success()
 
@@ -97,21 +94,21 @@ jobs:
       # --------------------------------
       # 7. Deploy to WSL / Server
       # --------------------------------
-      - name: Deploy to WSL
+      - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            echo "🚀 Starting Deployment..."
+            echo "🚀 Deploy starting..."
 
-            cd ~/my-cicd-project || exit 1
+            cd ~/my-cicd-project
 
             git pull origin main
 
             dotnet build App/App.csproj -c Release
 
-            echo "========================="
-            echo "DEPLOY SUCCESSFUL 🚀"
-            echo "========================="
+            echo "===================="
+            echo "DEPLOY SUCCESS 🚀"
+            echo "===================="
