@@ -1,30 +1,42 @@
-name: CI Pipeline
+name: CI + Hermes QA Pipeline
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-qa:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Get code from GitHub
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup .NET
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Restore
-  run: dotnet restore App/App.csproj
+        run: dotnet restore App/App.csproj
 
-- name: Build
-  run: dotnet build App/App.csproj --no-restore
+      - name: Build
+        run: dotnet build App/App.csproj --no-restore
 
-      # 5. Run app
-      - name: Run
-        run: dotnet run --project App/App.csproj
+      - name: Install Hermes
+        run: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+
+      - name: Set API Key
+        run: echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" >> $GITHUB_ENV
+
+      - name: Run Hermes QA
+        run: |
+          RESULT=$(hermes run "QA this .NET project. Return only PASS or FAIL.")
+          echo $RESULT
+
+          if [[ "$RESULT" != *"PASS"* ]]; then
+            echo "QA FAILED"
+            exit 1
+          fi
+
+          echo "QA PASSED"
