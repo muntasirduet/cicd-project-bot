@@ -133,63 +133,19 @@ jobs:
             echo "✅ QA PASSED"
           fi
 
-  # ============================================
-  # OPTION A: Deploy via SSH (for remote/VPS servers with public IP)
-  # Requires secrets: SERVER_HOST, SERVER_USER, SERVER_SSH_KEY
-  # ============================================
-  deploy-ssh:
+  deploy-self-hosted:
     needs: build-and-qa
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: success() && needs.build-and-qa.outputs.qa_status == 'PASS'
 
     steps:
-      - name: Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || '22' }}
-          timeout: 60s
-          command_timeout: 10m
-          script_stop: true
-          script: |
-            set -euo pipefail
-            echo "🚀 Starting Deployment..."
-
-            mkdir -p ~/my-cicd-project
-            cd ~/my-cicd-project
-
-            echo "Pulling latest code..."
-            git fetch origin
-            git reset --hard origin/main
-
-            echo "Building project..."
-            dotnet build App/App.csproj -c Release
-
-            echo "===================="
-            echo "DEPLOY SUCCESS 🚀"
-            echo "===================="
-
-  # ============================================
-  # OPTION B: Deploy via Self-Hosted Runner (for local WSL/machine)
-  # This runs the deploy step directly on your machine.
-  # To use: comment out OPTION A above and uncomment this job,
-  # then set up a self-hosted runner (see README).
-  # ============================================
-  # deploy-self-hosted:
-  #   needs: build-and-qa
-  #   runs-on: self-hosted
-  #   if: success() && needs.build-and-qa.outputs.qa_status == 'PASS'
-  #
-  #   steps:
-  #     - name: Deploy locally
-  #       run: |
-  #         set -euo pipefail
-  #         echo "🚀 Starting Local Deployment..."
-  #         cd ~/my-cicd-project
-  #         git pull origin main
-  #         dotnet build App/App.csproj -c Release
-  #         echo "===================="
-  #         echo "LOCAL DEPLOY SUCCESS 🚀"
-  #         echo "===================="
+      - name: Deploy locally on WSL
+        run: |
+          set -euo pipefail
+          echo "🚀 Starting Local Deployment..."
+          cd ~/my-cicd-project
+          git pull origin main
+          dotnet build App/App.csproj -c Release
+          echo "===================="
+          echo "LOCAL DEPLOY SUCCESS 🚀"
+          echo "===================="
