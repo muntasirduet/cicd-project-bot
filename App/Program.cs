@@ -1,5 +1,15 @@
-﻿// See https://aka.ms/new-console-template for more information
-Console.WriteLine("Hello, World!");
-Console.WriteLine("Hello, Deployed World from WSL!");
-Console.WriteLine("Test deploy at Fri Apr 24 14:58:35 +06 2026");
-Console.WriteLine("Latest deploy");
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+app.MapGet("/", () => new { message = "Hello from CI/CD Deployed API!", timestamp = DateTime.UtcNow });
+
+app.MapGet("/health", () => new { status = "healthy", runner = "wsl-self-hosted" });
+
+app.MapGet("/deploy-info", () => new
+{
+    deployedAt = DateTime.UtcNow,
+    environment = "WSL Self-Hosted Runner",
+    framework = ".NET 8 ASP.NET Core"
+});
+
+app.Run();
