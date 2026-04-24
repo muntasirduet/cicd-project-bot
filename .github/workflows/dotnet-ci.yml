@@ -7,6 +7,8 @@ on:
 jobs:
   build-and-qa:
     runs-on: ubuntu-latest
+    outputs:
+      qa_status: ${{ steps.qa.outputs.status }}
 
     steps:
       # --------------------------------
@@ -42,11 +44,13 @@ jobs:
       # --------------------------------
       - name: Collect Git Diff Context
         run: |
-          echo "===== CHANGED FILES =====" > context.txt
-          git diff --name-only HEAD~1 HEAD >> context.txt
-
-          echo "===== CODE DIFF =====" >> context.txt
-          git diff HEAD~1 HEAD >> context.txt
+          {
+            echo "===== CHANGED FILES ====="
+            git diff --name-only HEAD~1 HEAD
+            echo ""
+            echo "===== CODE DIFF ====="
+            git diff HEAD~1 HEAD
+          } > context.txt
 
       # --------------------------------
       # 6. Install jq (FIX JSON ISSUES)
@@ -62,59 +66,130 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          CONTEXT=$(cat context.txt | head -c 4000)
+          CONTEXT=$(cat context.txt | head -c 4000 | jq -Rs .)
 
-          # SAFE JSON ESCAPING
-          SAFE_CONTEXT=$(echo "$CONTEXT" | jq -Rs .)
-
-          RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
-            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"google/gemini-3.1-flash-lite-preview\",
-              \"messages\": [
+          # Build payload safely with jq
+          PAYLOAD=$(jq -n \
+            --arg context "${CONTEXT}" \
+            '{
+              model: "google/gemini-2.0-flash-lite-preview-02-05",
+              messages: [
                 {
-                  \"role\": \"system\",
-                  \"content\": \"You are Hermes QA agent. You analyze code diffs for build safety and risks.\"
+                  role: "system",
+                  content: "You are Hermes QA agent. Analyze code diffs for build safety, risks, breaking changes, and security issues. Return ONLY valid JSON: {\"status\":\"PASS\" or \"FAIL\",\"reason\":\"concise explanation\"}"
                 },
                 {
-                  \"role\": \"user\",
-                  \"content\": \"Analyze this git diff. Check for build issues, missing dependencies, breaking changes, and security risks. Return ONLY JSON: {\\\"status\\\":\\\"PASS or FAIL\\\",\\\"reason\\\":\\\"\\\"}. Diff: $SAFE_CONTEXT\"
+                  role: "user",
+                  content: "Analyze this git diff and return JSON only. Diff: \($context)"
                 }
               ]
-            }")
+            }')
 
-          echo "$RESPONSE"
+          echo "Sending request to OpenRouter..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" https://openrouter.ai/api/v1/chat/completions \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
 
-          STATUS=$(echo "$RESPONSE" | grep -o '"status":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
 
-          echo "QA_STATUS=$STATUS" >> $GITHUB_ENV
-          echo "✅ QA PASSED"
+          echo "HTTP Code: $HTTP_CODE"
+          echo "Response: $BODY"
 
-  deploy:
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ OpenRouter API failed with HTTP $HTTP_CODE"
+            echo "status=FAIL" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Extract message content
+          CONTENT=$(echo "$BODY" | jq -r '.choices[0].message.content // empty')
+          echo "QA Content: $CONTENT"
+
+          if [ -z "$CONTENT" ]; then
+            echo "❌ Empty response from QA agent"
+            echo "status=FAIL" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Parse JSON from content (handle markdown code blocks)
+          CLEAN_CONTENT=$(echo "$CONTENT" | sed 's/```json//g; s/```//g' | tr -d '\n\r' | sed 's/^ *//;s/ *$//')
+
+          QA_STATUS=$(echo "$CLEAN_CONTENT" | jq -r '.status // "FAIL"')
+          QA_REASON=$(echo "$CLEAN_CONTENT" | jq -r '.reason // "Unknown error"')
+
+          echo "status=$QA_STATUS" >> $GITHUB_OUTPUT
+          echo "QA_STATUS=$QA_STATUS" >> $GITHUB_ENV
+          echo "QA_REASON=$QA_REASON" >> $GITHUB_ENV
+
+          echo "QA Result: $QA_STATUS"
+          echo "QA Reason: $QA_REASON"
+
+          if [ "$QA_STATUS" == "FAIL" ]; then
+            echo "❌ QA FAILED"
+            exit 1
+          else
+            echo "✅ QA PASSED"
+          fi
+
+  # ============================================
+  # OPTION A: Deploy via SSH (for remote/VPS servers with public IP)
+  # Requires secrets: SERVER_HOST, SERVER_USER, SERVER_SSH_KEY
+  # ============================================
+  deploy-ssh:
     needs: build-and-qa
     runs-on: ubuntu-latest
-    if: success()
+    if: success() && needs.build-and-qa.outputs.qa_status == 'PASS'
 
     steps:
-      # --------------------------------
-      # 8. Deploy to WSL / Server
-      # --------------------------------
-      - name: Deploy
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || '22' }}
+          timeout: 60s
+          command_timeout: 10m
+          script_stop: true
           script: |
+            set -euo pipefail
             echo "🚀 Starting Deployment..."
 
+            mkdir -p ~/my-cicd-project
             cd ~/my-cicd-project
 
-            git pull origin main
+            echo "Pulling latest code..."
+            git fetch origin
+            git reset --hard origin/main
 
+            echo "Building project..."
             dotnet build App/App.csproj -c Release
 
             echo "===================="
             echo "DEPLOY SUCCESS 🚀"
             echo "===================="
+
+  # ============================================
+  # OPTION B: Deploy via Self-Hosted Runner (for local WSL/machine)
+  # This runs the deploy step directly on your machine.
+  # To use: comment out OPTION A above and uncomment this job,
+  # then set up a self-hosted runner (see README).
+  # ============================================
+  # deploy-self-hosted:
+  #   needs: build-and-qa
+  #   runs-on: self-hosted
+  #   if: success() && needs.build-and-qa.outputs.qa_status == 'PASS'
+  #
+  #   steps:
+  #     - name: Deploy locally
+  #       run: |
+  #         set -euo pipefail
+  #         echo "🚀 Starting Local Deployment..."
+  #         cd ~/my-cicd-project
+  #         git pull origin main
+  #         dotnet build App/App.csproj -c Release
+  #         echo "===================="
+  #         echo "LOCAL DEPLOY SUCCESS 🚀"
+  #         echo "===================="
