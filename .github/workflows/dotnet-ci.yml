@@ -72,7 +72,7 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg context "${CONTEXT}" \
             '{
-              model: "google/gemini-2.0-flash-lite-preview-02-05",
+              model: "google/gemini-2.0-flash-001",
               messages: [
                 {
                   role: "system",
