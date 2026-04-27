@@ -1,0 +1,5 @@
+/home/devuser/my-cicd-project/App/publish/App
+/home/devuser/my-cicd-project/App/publish/App.dll
+/home/devuser/my-cicd-project/App/publish/App.deps.json
+/home/devuser/my-cicd-project/App/publish/App.runtimeconfig.json
+/home/devuser/my-cicd-project/App/publish/App.pdb

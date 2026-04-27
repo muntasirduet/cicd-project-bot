@@ -12,4 +12,11 @@ app.MapGet("/deploy-info", () => new
     framework = ".NET 8 ASP.NET Core"
 });
 
+app.MapGet("/whoami", () => new { 
+    name = "Hermes Agent", 
+    role = "CI/CD Assistant", 
+    status = "Active",
+    message = "Deployed successfully via GitHub Actions!"
+});
+
 app.Run();

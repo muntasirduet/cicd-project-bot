@@ -1,0 +1,14 @@
+[Unit]
+Description=my-cicd-project Web API
+After=network.target
+
+[Service]
+Type=simple
+User=devuser
+WorkingDirectory=/home/devuser/my-cicd-project/App/publish
+ExecStart=/usr/bin/dotnet /home/devuser/my-cicd-project/App/publish/App.dll --urls "http://localhost:5000"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
